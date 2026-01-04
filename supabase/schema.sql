@@ -288,3 +288,31 @@ for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
 
 create policy "entitlements_select_own" on entitlements
 for select using (auth.uid() = user_id);
+
+create or replace function public.handle_new_user()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  insert into public.profiles (user_id, display_name)
+  values (
+    new.id,
+    coalesce(
+      new.raw_user_meta_data->>'full_name',
+      new.raw_user_meta_data->>'name',
+      null
+    )
+  )
+  on conflict (user_id) do update
+    set display_name = excluded.display_name;
+  return new;
+end;
+$$;
+
+drop trigger if exists on_auth_user_created on auth.users;
+
+create trigger on_auth_user_created
+after insert on auth.users
+for each row execute function public.handle_new_user();

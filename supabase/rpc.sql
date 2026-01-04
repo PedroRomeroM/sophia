@@ -415,7 +415,18 @@ select jsonb_build_object(
           'orderIndex', c.order_index,
           'type', c.type,
           'isFinal', c.is_final,
-          'payload', coalesce(ct.payload, c.payload)
+          'payload', coalesce(ct.payload, c.payload),
+          'bestAttempt', (
+            case
+              when best_attempt.answers is null then null
+              else jsonb_build_object(
+                'answers', best_attempt.answers,
+                'result', best_attempt.result,
+                'score', best_attempt.score,
+                'createdAt', best_attempt.created_at
+              )
+            end
+          )
         )
         order by c.order_index
       ),
@@ -425,6 +436,48 @@ select jsonb_build_object(
     left join challenge_translations ct
       on ct.challenge_id = c.id
      and ct.locale = p_locale
+    left join lateral (
+      select
+        ca.answers,
+        ca.result,
+        ca.created_at,
+        case
+          when c.type = 'quiz' then
+            case
+              when (ca.answers->>'choiceIndex')::int = (c.payload->>'answer_index')::int then 100
+              else 0
+            end
+          when c.type = 'true_false' then
+            case
+              when (ca.answers->>'answer')::boolean = (c.payload->>'answer')::boolean then 100
+              else 0
+            end
+          when c.type = 'match' then
+            case
+              when jsonb_typeof(ca.answers->'pairs') = 'array'
+               and jsonb_typeof(c.payload->'pairs') = 'array'
+               and jsonb_array_length(c.payload->'pairs') > 0
+              then
+                floor((
+                  select count(*)
+                  from jsonb_array_elements(c.payload->'pairs') as exp(pair)
+                  where exists (
+                    select 1
+                    from jsonb_array_elements(ca.answers->'pairs') as ans(pair)
+                    where ans.pair->>'left' = exp.pair->>'left'
+                      and ans.pair->>'right' = exp.pair->>'right'
+                  )
+                )::numeric / jsonb_array_length(c.payload->'pairs')::numeric * 100)
+              else 0
+            end
+          else 0
+        end as score
+      from challenge_attempts ca
+      where ca.user_id = auth.uid()
+        and ca.challenge_id = c.id
+      order by score desc, ca.created_at desc
+      limit 1
+    ) best_attempt on true
     where c.phase_id = p.id
       and c.is_published = true
   )
@@ -437,9 +490,311 @@ where p.id = p_phase_id
   and p.is_published = true;
 $$;
 
+create or replace function rpc_submit_challenge_attempt(
+  p_challenge_id uuid,
+  p_answers jsonb
+)
+returns jsonb
+language plpgsql
+as $$
+declare
+  v_user_id uuid := auth.uid();
+  v_challenge_id uuid;
+  v_challenge_type challenge_type;
+  v_payload jsonb;
+  v_phase_id uuid;
+  v_block_id uuid;
+  v_trail_id uuid;
+  v_block_order int;
+  v_phase_order int;
+  v_is_free boolean;
+  v_has_entitlement boolean;
+  v_prev_block_completed boolean;
+  v_prev_phase_completed boolean;
+  v_block_unlocked boolean;
+  v_phase_unlocked boolean;
+  v_attempt_score int := 0;
+  v_min_score int := 100;
+  v_result boolean := false;
+  v_expected_pairs int := 0;
+  v_matched_pairs int := 0;
+  v_total_challenges int := 0;
+  v_answered_challenges int := 0;
+  v_correct_challenges int := 0;
+  v_phase_status progress_status;
+  v_phase_completed boolean := false;
+  v_total_phases int := 0;
+  v_completed_phases int := 0;
+  v_final_total int := 0;
+  v_final_passed int := 0;
+  v_block_status progress_status;
+  v_block_completed boolean := false;
+begin
+  if v_user_id is null then
+    raise exception 'not_authenticated';
+  end if;
+
+  select
+    c.id,
+    c.type,
+    c.payload,
+    c.phase_id,
+    p.block_id,
+    b.trail_id,
+    b.order_index,
+    p.order_index,
+    b.is_free
+  into
+    v_challenge_id,
+    v_challenge_type,
+    v_payload,
+    v_phase_id,
+    v_block_id,
+    v_trail_id,
+    v_block_order,
+    v_phase_order,
+    v_is_free
+  from challenges c
+  join phases p on p.id = c.phase_id
+  join blocks b on b.id = p.block_id
+  join trails t on t.id = b.trail_id
+  where c.id = p_challenge_id
+    and c.is_published = true
+    and p.is_published = true
+    and b.is_published = true
+    and t.is_published = true;
+
+  if not found then
+    raise exception 'challenge_not_available';
+  end if;
+
+  select exists (
+    select 1
+    from entitlements e
+    where e.user_id = v_user_id
+      and e.status = 'active'
+      and (e.expires_at is null or e.expires_at > now())
+  ) into v_has_entitlement;
+
+  v_has_entitlement := v_is_free or v_has_entitlement;
+
+  if v_block_order = 1 then
+    v_prev_block_completed := true;
+  else
+    select exists (
+      select 1
+      from blocks bprev
+      join block_progress bp
+        on bp.block_id = bprev.id
+       and bp.user_id = v_user_id
+      where bprev.trail_id = v_trail_id
+        and bprev.order_index = v_block_order - 1
+        and bp.status = 'completed'
+    ) into v_prev_block_completed;
+  end if;
+
+  v_block_unlocked := v_has_entitlement and v_prev_block_completed;
+
+  if v_phase_order = 1 then
+    v_prev_phase_completed := true;
+  else
+    select exists (
+      select 1
+      from phases pprev
+      join phase_progress pp
+        on pp.phase_id = pprev.id
+       and pp.user_id = v_user_id
+      where pprev.block_id = v_block_id
+        and pprev.order_index = v_phase_order - 1
+        and pp.status = 'completed'
+    ) into v_prev_phase_completed;
+  end if;
+
+  v_phase_unlocked := v_block_unlocked and v_prev_phase_completed;
+
+  if not v_phase_unlocked then
+    raise exception 'phase_locked';
+  end if;
+
+  v_min_score := coalesce((v_payload->>'min_score')::int, 100);
+
+  if v_challenge_type = 'quiz' then
+    if p_answers ? 'choiceIndex' then
+      if (p_answers->>'choiceIndex')::int = (v_payload->>'answer_index')::int then
+        v_attempt_score := 100;
+      end if;
+    end if;
+  elsif v_challenge_type = 'true_false' then
+    if p_answers ? 'answer' then
+      if (p_answers->>'answer')::boolean = (v_payload->>'answer')::boolean then
+        v_attempt_score := 100;
+      end if;
+    end if;
+  elsif v_challenge_type = 'match' then
+    if jsonb_typeof(p_answers->'pairs') = 'array' and jsonb_typeof(v_payload->'pairs') = 'array' then
+      v_expected_pairs := jsonb_array_length(v_payload->'pairs');
+      if v_expected_pairs > 0 then
+        select count(*)
+        into v_matched_pairs
+        from jsonb_array_elements(v_payload->'pairs') as exp(pair)
+        where exists (
+          select 1
+          from jsonb_array_elements(p_answers->'pairs') as ans(pair)
+          where ans.pair->>'left' = exp.pair->>'left'
+            and ans.pair->>'right' = exp.pair->>'right'
+        );
+        v_attempt_score := floor((v_matched_pairs::numeric / v_expected_pairs::numeric) * 100);
+      end if;
+    end if;
+  end if;
+
+  v_result := v_attempt_score >= v_min_score;
+
+  insert into challenge_attempts (user_id, challenge_id, result, answers)
+  values (v_user_id, v_challenge_id, v_result, p_answers);
+
+  select count(*)
+  into v_total_challenges
+  from challenges c
+  where c.phase_id = v_phase_id
+    and c.is_published = true;
+
+  select count(distinct ca.challenge_id)
+  into v_answered_challenges
+  from challenge_attempts ca
+  join challenges c on c.id = ca.challenge_id
+  where ca.user_id = v_user_id
+    and c.phase_id = v_phase_id
+    and c.is_published = true;
+
+  select count(distinct ca.challenge_id)
+  into v_correct_challenges
+  from challenge_attempts ca
+  join challenges c on c.id = ca.challenge_id
+  where ca.user_id = v_user_id
+    and c.phase_id = v_phase_id
+    and c.is_published = true
+    and ca.result = true;
+
+  if v_total_challenges > 0
+     and v_answered_challenges = v_total_challenges
+     and v_correct_challenges * 2 >= v_total_challenges then
+    v_phase_status := 'completed';
+    v_phase_completed := true;
+  else
+    v_phase_status := 'in_progress';
+    v_phase_completed := false;
+  end if;
+
+  insert into phase_progress (user_id, phase_id, status, score, attempts, last_attempt_at)
+  values (
+    v_user_id,
+    v_phase_id,
+    v_phase_status,
+    case
+      when v_total_challenges > 0 then floor((v_correct_challenges::numeric / v_total_challenges::numeric) * 100)
+      else 0
+    end,
+    1,
+    now()
+  )
+  on conflict (user_id, phase_id) do update
+    set status = case
+      when phase_progress.status = 'completed' then 'completed'
+      else excluded.status
+    end,
+    score = excluded.score,
+    attempts = phase_progress.attempts + 1,
+    last_attempt_at = excluded.last_attempt_at;
+
+  select count(*)
+  into v_total_phases
+  from phases p
+  where p.block_id = v_block_id
+    and p.is_published = true;
+
+  select count(*)
+  into v_completed_phases
+  from phase_progress pp
+  join phases p on p.id = pp.phase_id
+  where pp.user_id = v_user_id
+    and p.block_id = v_block_id
+    and p.is_published = true
+    and pp.status = 'completed';
+
+  select count(*)
+  into v_final_total
+  from challenges c
+  join phases p on p.id = c.phase_id
+  where p.block_id = v_block_id
+    and c.is_published = true
+    and c.is_final = true;
+
+  select count(*)
+  into v_final_passed
+  from (
+    select c.id,
+           max(case when ca.result then 1 else 0 end) as has_pass
+    from challenges c
+    join phases p on p.id = c.phase_id
+    left join challenge_attempts ca
+      on ca.challenge_id = c.id
+     and ca.user_id = v_user_id
+    where p.block_id = v_block_id
+      and c.is_published = true
+      and c.is_final = true
+    group by c.id
+  ) final_checks
+  where final_checks.has_pass = 1;
+
+  if v_total_phases > 0
+     and v_completed_phases = v_total_phases
+     and v_final_total > 0
+     and v_final_passed = v_final_total then
+    v_block_status := 'completed';
+    v_block_completed := true;
+  elsif v_block_unlocked then
+    v_block_status := 'in_progress';
+    v_block_completed := false;
+  else
+    v_block_status := 'locked';
+    v_block_completed := false;
+  end if;
+
+  insert into block_progress (user_id, block_id, status, passed_final_at)
+  values (
+    v_user_id,
+    v_block_id,
+    v_block_status,
+    case when v_block_completed then now() else null end
+  )
+  on conflict (user_id, block_id) do update
+    set status = case
+      when block_progress.status = 'completed' then 'completed'
+      else excluded.status
+    end,
+    passed_final_at = case
+      when block_progress.status = 'completed' then block_progress.passed_final_at
+      else excluded.passed_final_at
+    end;
+
+  return jsonb_build_object(
+    'result', v_result,
+    'score', v_attempt_score,
+    'phaseStatus', (select status::text from phase_progress where user_id = v_user_id and phase_id = v_phase_id),
+    'phaseCompleted', (select status from phase_progress where user_id = v_user_id and phase_id = v_phase_id) = 'completed',
+    'blockStatus', (select status::text from block_progress where user_id = v_user_id and block_id = v_block_id),
+    'blockCompleted', (select status from block_progress where user_id = v_user_id and block_id = v_block_id) = 'completed',
+    'correctCount', v_correct_challenges,
+    'totalChallenges', v_total_challenges
+  );
+end;
+$$;
+
 grant execute on function rpc_get_trails(text) to anon, authenticated;
 grant execute on function rpc_get_trail(uuid, text) to anon, authenticated;
 grant execute on function rpc_get_block(uuid, text) to anon, authenticated;
 grant execute on function rpc_get_phase(uuid, text) to anon, authenticated;
+grant execute on function rpc_submit_challenge_attempt(uuid, jsonb) to authenticated;
 
 commit;
