@@ -81,6 +81,12 @@ export default function BlockScreen() {
         <Text style={styles.phaseMeta}>
           {phase.lockReason ? lockReasonLabel[phase.lockReason] : 'Disponivel'}
         </Text>
+        {phase.phaseType === 'review' ? (
+          <>
+            <Text style={styles.reviewBadge}>Revisao</Text>
+            <Text style={styles.reviewCta}>Fase de revisao do bloco</Text>
+          </>
+        ) : null}
         {phase.lockReason === 'subscription' ? (
           <Text style={styles.phaseCta}>Assinar para desbloquear</Text>
         ) : null}
@@ -240,6 +246,23 @@ const styles = StyleSheet.create({
   },
   phaseCta: {
     fontSize: 13,
+    color: '#0f172a',
+    fontWeight: '600',
+    marginTop: 6,
+  },
+  reviewBadge: {
+    alignSelf: 'flex-start',
+    marginTop: 6,
+    backgroundColor: '#0f172a',
+    color: '#ffffff',
+    fontSize: 11,
+    fontWeight: '600',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 999,
+  },
+  reviewCta: {
+    fontSize: 12,
     color: '#0f172a',
     fontWeight: '600',
     marginTop: 6,

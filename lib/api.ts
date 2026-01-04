@@ -1,7 +1,10 @@
 import { supabase } from './supabase';
 import type {
   BlockDetail,
+  DebugGrantEntitlementResponse,
+  DebugResetAccountResponse,
   LocaleCode,
+  NextBlockSummary,
   PhaseDetail,
   SubmitChallengeAttemptResponse,
   TrailDetail,
@@ -52,6 +55,16 @@ export async function getPhase(
   });
 }
 
+export async function getNextBlock(
+  blockId: string,
+  locale: LocaleCode = DEFAULT_LOCALE
+): Promise<NextBlockSummary | null> {
+  return callRpc<NextBlockSummary | null>('rpc_get_next_block', {
+    p_block_id: blockId,
+    p_locale: locale,
+  });
+}
+
 export async function submitChallengeAttempt(
   challengeId: string,
   answers: Record<string, unknown>
@@ -60,4 +73,12 @@ export async function submitChallengeAttempt(
     p_challenge_id: challengeId,
     p_answers: answers,
   });
+}
+
+export async function debugGrantEntitlement(): Promise<DebugGrantEntitlementResponse> {
+  return callRpc<DebugGrantEntitlementResponse>('rpc_debug_grant_entitlement', {});
+}
+
+export async function debugResetAccount(): Promise<DebugResetAccountResponse> {
+  return callRpc<DebugResetAccountResponse>('rpc_debug_reset_account', {});
 }

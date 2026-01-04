@@ -25,6 +25,7 @@
   - Progresso: `rpc_submit_challenge_attempt` grava tentativas e atualiza `phase_progress` e `block_progress`.
   - Assinatura: tabela `entitlements` controla acesso (status/expiracao) e e usada nas RPCs.
   - Autenticacao: login/cadastro por email/senha via Supabase Auth.
+  - Pos-revisao: `rpc_get_next_block` retorna o proximo bloco apos fase de revisao concluida.
 - Comunicacao entre camadas: `lib/supabase.ts` instancia cliente; `lib/api.ts` chama RPCs; telas consomem `lib/api.ts`.
 - Pontos criticos de seguranca: RLS ativa em todas as tabelas; acesso publico somente a conteudo publicado; dados de progresso/entitlements restritos ao usuario; RPC de progresso exige usuario autenticado.
 - Limitacoes conhecidas: sem offline, sem pagamentos ativos, sem admin panel, sem social login, sem i18n no app.
@@ -35,6 +36,7 @@
   - `challenge_type`: `quiz`, `true_false`, `match`.
   - `progress_status`: `locked`, `in_progress`, `completed`.
   - `entitlement_status`: `active`, `expired`, `canceled`.
+  - `phase_type`: `regular`, `review`.
 - Conteudo:
   - `trails` -> `blocks` -> `phases` -> `challenges`.
   - Tabelas de traducao: `trail_translations`, `block_translations`, `phase_translations`, `challenge_translations`.
@@ -59,15 +61,16 @@
     - `true_false`: `{ answer: boolean }`
     - `match`: `{ pairs: [{ left: string, right: string }] }`
   - `profiles` sao criados automaticamente por trigger em `auth.users` (funcao `handle_new_user`).
+  - `phase_type = 'review'` indica fase de revisao (final do bloco).
 - Views:
   - `v_trails_published`, `v_blocks_published`, `v_phases_published`, `v_challenges_published`, `v_readings_published` (consultas simples).
 - RPCs (retornam JSON com chaves em camelCase):
-  - `rpc_get_trails`, `rpc_get_trail`, `rpc_get_block`, `rpc_get_phase`.
+  - `rpc_get_trails`, `rpc_get_trail`, `rpc_get_block`, `rpc_get_phase`, `rpc_get_next_block`.
   - Computam `hasAccess`, `isUnlocked`, `status` e `lockReason` para blocos/fases.
 - `rpc_get_phase` inclui `bestAttempt` por desafio (melhor tentativa do usuario).
 - RPCs de escrita:
   - `rpc_submit_challenge_attempt` registra tentativa e atualiza progresso.
-- Seed: `supabase/seed.sql` cria a trilha "Sao Tomas de Aquino" com UUIDs fixos, 3 blocos (2 free + 1 assinatura), 6 fases, 14 desafios e 3 leituras.
+- Seed: `supabase/seed.sql` cria a trilha "Sao Tomas de Aquino" com UUIDs fixos, 3 blocos (2 free + 1 assinatura), 6 fases, 14 desafios e 3 leituras (fases de revisao nomeadas como "Revisao - Socrates/Platao/Aristoteles").
 
 ## Frontend
 - Estrutura:
@@ -85,7 +88,7 @@
 - Navegacao: Expo Router com Stack + Tabs (Trilhas, Perfil); gate de autenticacao redireciona nao autenticados para `/(auth)/sign-in`.
 - Comunicacao com backend: RPCs via `lib/api.ts`; locale padrao `pt-BR`.
 - Tratamento de erros: mensagens simples e retry para telas de lista/detalhe.
-- Regras de UI/UX: tema claro, layout simples; mensagens de bloqueio via `lockReason`; paywall para `subscription`; desafios renderizados por tipo, carregam melhor tentativa e exibem resposta do usuario com cores; resumo de progresso exibido na fase; login/cadastro simples.
+- Regras de UI/UX: tema claro, layout simples; mensagens de bloqueio via `lockReason`; paywall para `subscription`; desafios renderizados por tipo, carregam melhor tentativa e exibem resposta do usuario com cores; fases de revisao sao destacadas com badge e CTA "Fase de revisao do bloco"; resumo de progresso exibido na fase; ao completar revisao, mostrar card de conclusao com CTA para proximo bloco ou paywall; ao concluir fase, mostrar CTA para voltar ao bloco; login/cadastro simples.
 
 ## Decisoes Importantes
 - Supabase e a unica plataforma backend.
@@ -104,9 +107,12 @@
   - Melhor tentativa exibida ao reabrir a fase.
 - Paywall:
   - Conteudo com `lockReason` = `subscription` abre tela de paywall.
+- Revisao:
+  - Desafios finais devem ficar na fase `phase_type = review`.
 
 ## Pontos em Aberto
 - Integracoes de assinatura e validacao de recibos.
 - Admin panel para cadastro de trilhas/blocos/fases/desafios com filtros.
 - Suporte a multiplos idiomas no app.
 - Observabilidade, testes e analytics (DESCONHECIDO).
+- TODO: Remover RPCs/botoes de debug (`rpc_debug_grant_entitlement`, `rpc_debug_reset_account`) antes de producao.

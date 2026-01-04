@@ -3,6 +3,7 @@
 create type challenge_type as enum ('quiz','true_false','match');
 create type progress_status as enum ('locked','in_progress','completed');
 create type entitlement_status as enum ('active','expired','canceled');
+create type phase_type as enum ('regular','review');
 
 create table profiles (
   user_id uuid primary key references auth.users(id) on delete cascade,
@@ -56,6 +57,7 @@ create table phases (
   title text not null,
   description text,
   order_index int not null,
+  phase_type phase_type not null default 'regular',
   is_published boolean default false,
   created_at timestamptz default now(),
   unique (block_id, order_index)
@@ -288,6 +290,37 @@ for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
 
 create policy "entitlements_select_own" on entitlements
 for select using (auth.uid() = user_id);
+
+create unique index phases_block_review_unique on phases (block_id)
+where phase_type = 'review';
+
+create or replace function public.enforce_review_final_challenge()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_phase_type phase_type;
+begin
+  if new.is_final then
+    select phase_type
+      into v_phase_type
+      from public.phases
+     where id = new.phase_id;
+    if v_phase_type is distinct from 'review' then
+      raise exception 'final_challenge_requires_review_phase';
+    end if;
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists enforce_review_final_challenge on challenges;
+
+create trigger enforce_review_final_challenge
+before insert or update of is_final, phase_id on challenges
+for each row execute function public.enforce_review_final_challenge();
 
 create or replace function public.handle_new_user()
 returns trigger

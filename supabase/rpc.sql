@@ -320,6 +320,7 @@ select jsonb_build_object(
           'orderIndex', p.order_index,
           'title', coalesce(pt.title, p.title),
           'description', coalesce(pt.description, p.description),
+          'phaseType', p.phase_type,
           'isUnlocked', bs.is_unlocked and (p.order_index = 1 or prev.prev_completed),
           'status', (
             case
@@ -406,6 +407,7 @@ select jsonb_build_object(
   'blockId', p.block_id,
   'title', coalesce(pt.title, p.title),
   'description', coalesce(pt.description, p.description),
+  'phaseType', p.phase_type,
   'orderIndex', p.order_index,
   'challenges', (
     select coalesce(
@@ -488,6 +490,177 @@ left join phase_translations pt
  and pt.locale = p_locale
 where p.id = p_phase_id
   and p.is_published = true;
+$$;
+
+create or replace function rpc_get_next_block(p_block_id uuid, p_locale text default 'pt-BR')
+returns jsonb
+language sql
+stable
+as $$
+with ent as (
+  select exists (
+    select 1
+    from entitlements e
+    where e.user_id = auth.uid()
+      and e.status = 'active'
+      and (e.expires_at is null or e.expires_at > now())
+  ) as has_access
+),
+current_block as (
+  select b.trail_id, b.order_index
+  from blocks b
+  where b.id = p_block_id
+    and b.is_published = true
+),
+next_block as (
+  select
+    b.id,
+    b.trail_id,
+    b.order_index,
+    b.is_free,
+    coalesce(bt.title, b.title) as title,
+    coalesce(bt.description, b.description) as description
+  from blocks b
+  join current_block cb on cb.trail_id = b.trail_id
+  left join block_translations bt
+    on bt.block_id = b.id
+   and bt.locale = p_locale
+  where b.is_published = true
+    and b.order_index > cb.order_index
+  order by b.order_index
+  limit 1
+),
+next_status as (
+  select
+    nb.*,
+    ent.has_access,
+    case
+      when nb.order_index = 1 then true
+      else exists (
+        select 1
+        from blocks bprev
+        join block_progress bp
+          on bp.block_id = bprev.id
+         and bp.user_id = auth.uid()
+        where bprev.trail_id = nb.trail_id
+          and bprev.order_index = nb.order_index - 1
+          and bp.status = 'completed'
+      )
+    end as prev_completed
+  from next_block nb
+  cross join ent
+)
+select (
+  select jsonb_build_object(
+    'id', ns.id,
+    'trailId', ns.trail_id,
+    'orderIndex', ns.order_index,
+    'title', ns.title,
+    'description', ns.description,
+    'isFree', ns.is_free,
+    'hasAccess', (ns.is_free or ns.has_access),
+    'isUnlocked', (ns.is_free or ns.has_access) and ns.prev_completed,
+    'status', (
+      case
+        when bp.status is not null then bp.status::text
+        when (ns.is_free or ns.has_access) and ns.prev_completed
+          then 'in_progress'
+        else 'locked'
+      end
+    ),
+    'lockReason', (
+      case
+        when (ns.is_free or ns.has_access) then
+          case
+            when ns.order_index > 1 and not ns.prev_completed then 'previous_block'
+            else null
+          end
+        else 'subscription'
+      end
+    )
+  )
+  from next_status ns
+  left join lateral (
+    select bp.status
+    from block_progress bp
+    where bp.user_id = auth.uid()
+      and bp.block_id = ns.id
+    limit 1
+  ) bp on true
+);
+$$;
+
+create or replace function rpc_debug_grant_entitlement()
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_user_id uuid := auth.uid();
+begin
+  if v_user_id is null then
+    raise exception 'not_authenticated';
+  end if;
+
+  insert into entitlements (user_id, provider, product_id, status, expires_at, raw_receipt)
+  values (
+    v_user_id,
+    'debug',
+    'premium',
+    'active',
+    null,
+    jsonb_build_object('source', 'debug', 'createdAt', now())
+  )
+  on conflict (user_id, provider, product_id) do update
+    set status = 'active',
+        expires_at = null,
+        raw_receipt = excluded.raw_receipt;
+
+  return jsonb_build_object(
+    'status', 'active',
+    'provider', 'debug',
+    'productId', 'premium'
+  );
+end;
+$$;
+
+create or replace function rpc_debug_reset_account()
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_user_id uuid := auth.uid();
+  v_attempts int := 0;
+  v_phase int := 0;
+  v_block int := 0;
+  v_ent int := 0;
+begin
+  if v_user_id is null then
+    raise exception 'not_authenticated';
+  end if;
+
+  delete from challenge_attempts where user_id = v_user_id;
+  get diagnostics v_attempts = row_count;
+
+  delete from phase_progress where user_id = v_user_id;
+  get diagnostics v_phase = row_count;
+
+  delete from block_progress where user_id = v_user_id;
+  get diagnostics v_block = row_count;
+
+  delete from entitlements where user_id = v_user_id;
+  get diagnostics v_ent = row_count;
+
+  return jsonb_build_object(
+    'attemptsDeleted', v_attempts,
+    'phaseProgressDeleted', v_phase,
+    'blockProgressDeleted', v_block,
+    'entitlementsDeleted', v_ent
+  );
+end;
 $$;
 
 create or replace function rpc_submit_challenge_attempt(
@@ -727,6 +900,7 @@ begin
   from challenges c
   join phases p on p.id = c.phase_id
   where p.block_id = v_block_id
+    and p.phase_type = 'review'
     and c.is_published = true
     and c.is_final = true;
 
@@ -741,6 +915,7 @@ begin
       on ca.challenge_id = c.id
      and ca.user_id = v_user_id
     where p.block_id = v_block_id
+      and p.phase_type = 'review'
       and c.is_published = true
       and c.is_final = true
     group by c.id
@@ -795,6 +970,9 @@ grant execute on function rpc_get_trails(text) to anon, authenticated;
 grant execute on function rpc_get_trail(uuid, text) to anon, authenticated;
 grant execute on function rpc_get_block(uuid, text) to anon, authenticated;
 grant execute on function rpc_get_phase(uuid, text) to anon, authenticated;
+grant execute on function rpc_get_next_block(uuid, text) to authenticated;
+grant execute on function rpc_debug_grant_entitlement() to authenticated;
+grant execute on function rpc_debug_reset_account() to authenticated;
 grant execute on function rpc_submit_challenge_attempt(uuid, jsonb) to authenticated;
 
 commit;

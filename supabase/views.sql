@@ -29,7 +29,8 @@ select
   p.block_id,
   p.title,
   p.description,
-  p.order_index
+  p.order_index,
+  p.phase_type
 from phases p
 join blocks b on b.id = p.block_id
 join trails t on t.id = b.trail_id

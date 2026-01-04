@@ -1,4 +1,5 @@
 export type LocaleCode = string;
+export type PhaseType = 'regular' | 'review';
 
 export type ProgressStatus = 'locked' | 'in_progress' | 'completed';
 export type LockReason = 'subscription' | 'previous_block' | 'previous_phase' | null;
@@ -67,6 +68,19 @@ export type TrailBlock = {
   lockReason: 'subscription' | 'previous_block' | null;
 };
 
+export type NextBlockSummary = {
+  id: string;
+  trailId: string;
+  orderIndex: number;
+  title: string;
+  description: string | null;
+  isFree: boolean;
+  hasAccess: boolean;
+  isUnlocked: boolean;
+  status: ProgressStatus;
+  lockReason: 'subscription' | 'previous_block' | null;
+};
+
 export type TrailSummary = {
   id: string;
   slug: string;
@@ -83,6 +97,7 @@ export type PhaseSummary = {
   orderIndex: number;
   title: string;
   description: string | null;
+  phaseType: PhaseType;
   isUnlocked: boolean;
   status: ProgressStatus;
   lockReason: LockReason;
@@ -146,6 +161,7 @@ export type PhaseDetail = {
   blockId: string;
   title: string;
   description: string | null;
+  phaseType: PhaseType;
   orderIndex: number;
   challenges: ChallengeItem[];
 };
@@ -159,4 +175,17 @@ export type SubmitChallengeAttemptResponse = {
   blockCompleted: boolean;
   correctCount: number;
   totalChallenges: number;
+};
+
+export type DebugGrantEntitlementResponse = {
+  status: string;
+  provider: string;
+  productId: string;
+};
+
+export type DebugResetAccountResponse = {
+  attemptsDeleted: number;
+  phaseProgressDeleted: number;
+  blockProgressDeleted: number;
+  entitlementsDeleted: number;
 };

@@ -14,6 +14,8 @@
 - Conteudo bloqueado por `subscription` deve abrir o paywall; bloqueios por progresso nao devem liberar navegacao.
 - Acesso ao app deve passar pelo gate de autenticacao (login/cadastro).
 - Ao reabrir uma fase, exibir a melhor tentativa do usuario por desafio.
+- Desafios finais devem ficar apenas em fases `phase_type = review`.
+- Fases de revisao devem ser destacadas no card com badge e CTA indicando conclusao do bloco.
 
 ## Convencoes de Codigo
 - TypeScript strict deve permanecer ativo; tipagem central em `lib/types.ts`.

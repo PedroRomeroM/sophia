@@ -76,7 +76,7 @@ values
 on conflict (block_id, locale) do nothing;
 
 -- Phases
-insert into phases (id, block_id, title, description, order_index, is_published)
+insert into phases (id, block_id, title, description, order_index, phase_type, is_published)
 values
   (
     '9b6c1ef6-4c8b-4e3b-a1f4-1dbacb46f201',
@@ -84,14 +84,16 @@ values
     'Contexto e metodo',
     'Introducao ao metodo socratico e ao dialogo filosofico.',
     1,
+    'regular',
     true
   ),
   (
     '9b6c1ef6-4c8b-4e3b-a1f4-1dbacb46f202',
     '9b6c1ef6-4c8b-4e3b-a1f4-1dbacb46f101',
-    'Virtude e conhecimento',
-    'A relacao entre saber e vida etica.',
+    'Revisao - Socrates',
+    'Revisao final do bloco de Socrates.',
     2,
+    'review',
     true
   ),
   (
@@ -100,14 +102,16 @@ values
     'Mundo sensivel e Ideias',
     'A base da teoria das Ideias e seus exemplos.',
     1,
+    'regular',
     true
   ),
   (
     '9b6c1ef6-4c8b-4e3b-a1f4-1dbacb46f204',
     '9b6c1ef6-4c8b-4e3b-a1f4-1dbacb46f102',
-    'Alma e polis',
-    'A estrutura da alma e a organizacao politica.',
+    'Revisao - Platao',
+    'Revisao final do bloco de Platao.',
     2,
+    'review',
     true
   ),
   (
@@ -116,14 +120,16 @@ values
     'Logica e categorias',
     'Fundamentos da logica e da classificacao do ser.',
     1,
+    'regular',
     true
   ),
   (
     '9b6c1ef6-4c8b-4e3b-a1f4-1dbacb46f206',
     '9b6c1ef6-4c8b-4e3b-a1f4-1dbacb46f103',
-    'Ato e potencia',
-    'Explicacao da mudanca e das causas.',
+    'Revisao - Aristoteles',
+    'Revisao final do bloco de Aristoteles.',
     2,
+    'review',
     true
   )
 on conflict (id) do nothing;
@@ -139,8 +145,8 @@ values
   (
     '9b6c1ef6-4c8b-4e3b-a1f4-1dbacb46f202',
     'pt-BR',
-    'Virtude e conhecimento',
-    'A relacao entre saber e vida etica.'
+    'Revisao - Socrates',
+    'Revisao final do bloco de Socrates.'
   ),
   (
     '9b6c1ef6-4c8b-4e3b-a1f4-1dbacb46f203',
@@ -151,8 +157,8 @@ values
   (
     '9b6c1ef6-4c8b-4e3b-a1f4-1dbacb46f204',
     'pt-BR',
-    'Alma e polis',
-    'A estrutura da alma e a organizacao politica.'
+    'Revisao - Platao',
+    'Revisao final do bloco de Platao.'
   ),
   (
     '9b6c1ef6-4c8b-4e3b-a1f4-1dbacb46f205',
@@ -163,8 +169,8 @@ values
   (
     '9b6c1ef6-4c8b-4e3b-a1f4-1dbacb46f206',
     'pt-BR',
-    'Ato e potencia',
-    'Explicacao da mudanca e das causas.'
+    'Revisao - Aristoteles',
+    'Revisao final do bloco de Aristoteles.'
   )
 on conflict (phase_id, locale) do nothing;
 
